@@ -70,7 +70,7 @@ export const CONFIG = {
     defaultDurationMin: 120,
     // Public booking page endpoint = your Cloudflare Worker URL + /book
     // e.g. "https://kunimare-book.yourname.workers.dev". Empty = public page shows "not yet open".
-    workerUrl: "",
+    workerUrl: "https://kunimare-book.pratik-biswas.workers.dev/",
   },
 
   pdf: {
