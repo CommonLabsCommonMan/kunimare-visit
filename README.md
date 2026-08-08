@@ -1,0 +1,97 @@
+# Kunimare 来訪管理 / Visitor Management App
+
+国稀ブルワリーの **来訪予約・来訪報告書** アプリ。GitHub Pages でそのまま動く静的アプリです。
+Bilingual (日本語/English) visitor reservation & official report app for Kunimare Brewery, built for GitHub Pages.
+
+- 来訪の **予約・変更・キャンセル**（Notion 全体スケジュールと同期）
+- **来訪報告書** の作成 → 公式書式の **日本語PDF**（ロゴ・フッター入り）を自動生成
+- 添付（画像・PDF）の **自動テキスト抽出（OCR：日本語+英語）**
+- 生成PDFを Notion の該当スケジュール（ファイル&メディア）へ **自動添付**
+- 進行状況が見える **プログレスバー**（OCR → PDF → Notion同期 → 添付）
+- HACCP対応の **衛生チェック**、入退場時間、紹介・経由、立入りエリアを記録
+
+---
+
+## 1. デプロイ（GitHub Pages）
+
+1. このフォルダーの中身をそのまま GitHub リポジトリに push
+2. リポジトリの **Settings → Pages → Source: Deploy from a branch**、Branch: `main` / `(root)` を選択
+3. 数分後 `https://<ユーザー名>.github.io/<リポジトリ名>/` で開けます
+
+> ⚠️ **公開リポジトリにトークンを絶対に書き込まないでください。** トークンはアプリの設定画面から入力し、その端末のブラウザ（localStorage）にのみ保存されます。
+
+## 2. Notion 連携（約3分）
+
+1. https://www.notion.so/my-integrations → **New integration**
+   - Workspace: 会社のワークスペース ／ Capabilities: Read・Update・Insert content
+2. 発行された **Internal Integration Secret**（`ntn_…`）をコピー
+3. Notion で **スケジュール** ページ（全体スケジュールDBの親ページ）を開く → 右上「⋯」→ **接続（Connections）** → 作成したインテグレーションを追加
+4. アプリの **設定** → トークンを貼り付け → **接続テスト** → 保存
+
+データソースIDは設定済みです（全体スケジュール: `26ff5289-a51c-806a-bec4-000b77aae1bf`）。
+
+## 3. 接続方法（リレー）について
+
+Notion API はブラウザからの直接呼び出しを許可していないため、リレー経由で通信します。
+
+| 方式 | 設定 | 特徴 |
+|---|---|---|
+| **corsproxy.io**（初期値） | 不要 | すぐ使える。公共サービスのため稀に不安定 |
+| proxy.cors.sh | 不要 | 予備の公共リレー |
+| **Cloudflare Worker（推奨）** | 約5分 | 自前・無料・安定。`cloudflare-worker.js` をコピペでデプロイし、設定画面でURLを入力 |
+
+Worker の設置手順は `cloudflare-worker.js` の冒頭コメントに記載しています。
+
+## 4. ロゴ・フッター画像の差し替え
+
+- `assets/logo.png` … PDFヘッダー左上のロゴ（現在はプレースホルダー）
+- `assets/footer.png` … PDF最下部の帯画像（現在はプレースホルダー）
+
+同名で上書きするだけで、アプリとPDFの両方に反映されます。
+（設定画面から端末ごとに一時的な差し替えも可能）
+
+## 5. Notion プロパティ対応表
+
+アプリが読み書きする 全体スケジュール のプロパティ：
+
+| プロパティ | 型 | 用途 |
+|---|---|---|
+| 名前 | title | 件名 |
+| 日付 | date | 訪問日時（開始〜終了） |
+| カテゴリー | select | 来客・業者・取材など |
+| 訪問者名 / 会社・所属 / 紹介・経由 | text | Who / How |
+| 訪問人数 | number | 人数 |
+| 訪問エリア | multi-select | Where（立入りエリア） |
+| 訪問目的 | select | 目的 |
+| 入退場時間 | date (range) | 入場〜退場 |
+| 衛生チェック | multi-select | HACCP チェック項目 |
+| 訪問ステータス | select | 予約済→来訪済→報告書済 |
+| ファイル&メディア | files | 生成PDFの添付先 |
+| 議事録・完了 | checkbox | 報告書作成時に自動✓ |
+
+プロパティ名を変更した場合は `config.js` の `props` を合わせてください。
+
+## 6. 補足
+
+- **OCR** は初回実行時に OCRエンジン（tesseract.js）をCDNから読み込みます（要インターネット）。PDFの文字抽出はオフラインでも動作します。
+- **PDFは画像ベース**（全端末で同一の見た目・日本語フォント埋め込み相当）。報告書の全文は Notion ページ本文にもテキストとして書き込まれるため、検索性は保たれます。
+- デモモード（トークン未設定時）はブラウザ内保存で全機能を試せます。
+- `reports/` に生成済みの報告書PDF（エコラボ・BIFUKA BEER VILLAGE）を同梱しています。
+
+---
+
+# English
+
+**Visitor reservation & official report app** for Kunimare Brewery. Static app — runs on GitHub Pages as-is.
+
+Reserve / reschedule / cancel visits (synced to the Notion 全体スケジュール database), create official Japanese-format visit report PDFs (logo header + footer), OCR attachments (JA+EN), auto-attach the PDF to that day's schedule entry, with a step-by-step progress bar. Records HACCP hygiene checks, entry/exit times, introduced-by, and areas visited.
+
+**Deploy**: push this folder to a GitHub repo → Settings → Pages → deploy from branch → open `https://<user>.github.io/<repo>/`.
+
+**Notion**: create an integration at notion.so/my-integrations, connect it to the スケジュール page (⋯ → Connections), paste the token in the app's Settings → Test → Save. The token is stored only in that browser — never commit it to the repo.
+
+**Relay**: Notion's API blocks direct browser calls, so requests go through a relay. Default is corsproxy.io (zero setup). For production stability, deploy `cloudflare-worker.js` (free, ~5 min, instructions inside the file) and select "Own relay" in Settings.
+
+**Branding**: replace `assets/logo.png` and `assets/footer.png` (placeholders) with the real images — both the app header and the PDF pick them up.
+
+**Notes**: OCR loads tesseract.js from a CDN on first use (internet required); PDF text extraction works offline. PDFs are image-based for identical rendering everywhere; the full report text is also written into the Notion page body, so everything stays searchable. Demo mode (no token) stores everything locally so you can try the full flow safely.
