@@ -14,6 +14,7 @@
  *       （Workerのシークレット）でNotionに予約ページを作成します。
  *       ・カテゴリー=顧客予約／部門カテゴリー=ビアホール（複数選択）
  *       ・訪問ステータス=予約済（仮予約）
+ *       ・担当者=Pratik／議事録作成者=Pratik＋Kunimare Visit App
  *       ・リマインド（自動）= 前日
  *       ・ご予約確認書PDFを「ファイル&メディア」に添付
  *     GET /book  … 動作確認用。デプロイ済みの WORKER_VERSION を返します。
@@ -31,7 +32,7 @@
  *      "version" が下の WORKER_VERSION と同じならデプロイ完了です。
  * ============================================================ */
 
-const WORKER_VERSION = "2026-10-01";
+const WORKER_VERSION = "2026-10-01b";
 const NOTION = "https://api.notion.com";
 const NOTION_VERSION = "2025-09-03";
 
@@ -42,10 +43,21 @@ const P = {
   status: "訪問ステータス", visitor: "訪問者名", company: "会社・所属",
   count: "訪問人数", phone: "電話番号", email: "メール",
   plan: "プラン", nomihodai: "飲み放題", reminder: "リマインド（自動）", files: "ファイル&メディア",
+  person: "担当者", minutesAuthor: "議事録作成者",
 };
 // 部門カテゴリー は Notion 側で「複数選択（multi_select）」。既存の選択肢は
 // 「ビアホール」（ア）なので、config.js の booking.deptCategory と同じ綴りにすること。
 const BOOK = { category: "顧客予約", dept: "ビアホール", status: "予約済" };
+// ▼ 予約ページ作成時に自動で入れる担当者（Notion ユーザーID）。行ごとの変更は Notion 上で。
+//   担当者        = Pratik
+//   議事録作成者  = Pratik ＋ Kunimare Visit App（インテグレーション）
+const OWNER_ID = "2dfd872b-594c-81a2-a6ee-00026d1a9f98";
+const BOT_ID   = "3b6f5289-a51c-8120-83ac-0027e5501d33";
+const OWNERS = {
+  person: [OWNER_ID],
+  minutesAuthor: [OWNER_ID, BOT_ID],
+};
+const people = (ids) => ({ people: ids.map((id) => ({ object: "user", id })) });
 const PLANS = ["コース", "アラカルト", "未定"]; // config.js booking.plans と同じ
 const MAX_PDF_BYTES = 3_000_000;
 
@@ -174,9 +186,7 @@ async function handleBook(request, env) {
   // is a hard validation error): カテゴリー/訪問ステータス/プラン = select,
   // 部門カテゴリー = multi_select, 電話番号 = phone_number, メール = email,
   // 訪問人数 = number, 飲み放題 = checkbox, 日付/リマインド = date.
-  const page = await api("/v1/pages", {
-    method: "POST",
-    body: JSON.stringify({
+  const pageBody = {
       parent: { type: "data_source_id", data_source_id: DATA_SOURCE_ID },
       properties: {
         [P.title]: { title: [{ type: "text", text: { content: `【BH予約】${name}様 ${total}名` } }] },
@@ -184,6 +194,8 @@ async function handleBook(request, env) {
         [P.category]: { select: { name: BOOK.category } },
         [P.dept]: { multi_select: [{ name: BOOK.dept }] },
         [P.status]: { select: { name: BOOK.status } },
+        [P.person]: people(OWNERS.person),
+        [P.minutesAuthor]: people(OWNERS.minutesAuthor),
         [P.visitor]: rt(name + "様"),
         ...(group ? { [P.company]: rt(group) } : {}),
         [P.count]: { number: total || null },
@@ -199,8 +211,17 @@ async function handleBook(request, env) {
         para(`ご要望・備考：${notes || "—"}`),
         para(`受付：オンライン予約フォーム（仮予約）`),
       ],
-    }),
-  });
+  };
+  let page;
+  try {
+    page = await api("/v1/pages", { method: "POST", body: JSON.stringify(pageBody) });
+  } catch (e) {
+    // Fallback: if Notion rejects the integration bot inside 議事録作成者,
+    // retry with Pratik only (the booking must never fail because of this).
+    if (!(String(e.message).includes("400") && String(e.message).includes(P.minutesAuthor))) throw e;
+    pageBody.properties[P.minutesAuthor] = people(OWNERS.person);
+    page = await api("/v1/pages", { method: "POST", body: JSON.stringify(pageBody) });
+  }
 
   // --- attach the confirmation PDF (best effort) ---
   let attached = false;
