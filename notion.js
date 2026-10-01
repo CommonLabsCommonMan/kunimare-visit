@@ -67,6 +67,8 @@ const msel = (v) => ({ multi_select: (Array.isArray(v) ? v : v ? [v] : []).map((
 const num = (v) => ({ number: v == null || v === "" ? null : Number(v) });
 const chk = (v) => ({ checkbox: !!v });
 const dateProp = (start, end) => ({ date: start ? { start, ...(end ? { end } : {}) } : null });
+// people property from Notion user IDs (single id or array)
+const people = (ids) => ({ people: (Array.isArray(ids) ? ids : ids ? [ids] : []).map((id) => ({ object: "user", id: String(id) })) });
 
 function buildProps(v, { forCreate = false } = {}) {
   const props = {};
@@ -90,6 +92,12 @@ function buildProps(v, { forCreate = false } = {}) {
   if (v.nomihodai != null) props[P.nomihodai] = chk(v.nomihodai);
   // 部門カテゴリー is a multi-select in Notion (string or array accepted here)
   if (v.deptCategory) props[P.deptCategory] = msel(v.deptCategory);
+  // 担当者 / 議事録作成者: explicit ids win; otherwise CONFIG.owners defaults on create only
+  const owners = CONFIG.owners || {};
+  if (v.personIds) props[P.person] = people(v.personIds);
+  else if (forCreate && owners.person?.length) props[P.person] = people(owners.person);
+  if (v.minutesAuthorIds) props[P.minutesAuthor] = people(v.minutesAuthorIds);
+  else if (forCreate && owners.minutesAuthor?.length) props[P.minutesAuthor] = people(owners.minutesAuthor);
   // day-before reminder (existing Notion automation reads リマインド（自動）)
   if (v.reminderFromDate) {
     const d = new Date(v.reminderFromDate.slice(0, 10) + "T00:00:00");
@@ -205,14 +213,21 @@ export async function createVisit(v) {
   const para = (txt) => ({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: txt.slice(0, 1900) } }] } });
   if (v.escort) children.push(para("案内者：" + v.escort));
   if (v.memo) v.memo.split(/\n/).filter(Boolean).forEach((l) => children.push(para(l)));
-  const j = await api("/v1/pages", {
-    method: "POST",
-    body: {
-      parent: { type: "data_source_id", data_source_id: ds },
-      properties: buildProps(v, { forCreate: true }),
-      ...(children.length ? { children: children.slice(0, 40) } : {}),
-    },
-  });
+  const body = {
+    parent: { type: "data_source_id", data_source_id: ds },
+    properties: buildProps(v, { forCreate: true }),
+    ...(children.length ? { children: children.slice(0, 40) } : {}),
+  };
+  let j;
+  try {
+    j = await api("/v1/pages", { method: "POST", body });
+  } catch (e) {
+    // Fallback: if Notion rejects the integration bot inside 議事録作成者,
+    // retry with the 担当者 ids only so the record is still created.
+    if (!String(e.message).includes(P.minutesAuthor) || !body.properties[P.minutesAuthor]) throw e;
+    body.properties[P.minutesAuthor] = people((CONFIG.owners || {}).person || []);
+    j = await api("/v1/pages", { method: "POST", body });
+  }
   return parsePage(j);
 }
 
