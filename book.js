@@ -1,10 +1,14 @@
 /* book.js — public beer hall booking page (no Notion token in the browser).
- * Flow: validate → generate ご予約確認書 PDF client-side → POST to the
- * Cloudflare Worker /book endpoint (token lives there as a secret) →
- * Worker creates the Notion page (+ day-before reminder) and attaches the PDF.
+ * Flow: validate → generate ご予約確認書 PDF client-side (best effort, time-boxed)
+ * → POST multipart/form-data to the Cloudflare Worker /book endpoint (the
+ * Notion token lives there as a secret) → Worker creates the Notion page
+ * (+ day-before reminder) and attaches the PDF.
  */
 import { CONFIG } from "./config.js";
-import { generateBookingPdf } from "./pdfgen.js";
+import { generateBookingPdf, warmupPdfFonts } from "./pdfgen.js";
+
+const PDF_TIMEOUT_MS = 20000;  // the PDF is optional — never let it block the booking
+const SEND_TIMEOUT_MS = 60000; // network timeout for the booking request
 
 const BK = {
   ja: {
@@ -25,6 +29,7 @@ const BK = {
     errConsent: "個人情報の取り扱いに同意のうえ送信してください。",
     errPast: "本日以降の日付をご指定ください。",
     errSend: "送信できませんでした。時間をおいて再度お試しいただくか、お電話にてご予約ください。",
+    errNet: "通信エラーが発生しました。電波状況をご確認のうえ、もう一度お試しください。改善しない場合はお電話にてご予約ください。",
     closed: "オンライン予約は現在準備中です。お電話にてご予約ください。",
   },
   en: {
@@ -45,6 +50,7 @@ const BK = {
     errConsent: "Please agree to the privacy note before submitting.",
     errPast: "Please choose today or a future date.",
     errSend: "Could not send. Please try again later or call us to reserve.",
+    errNet: "Network error. Please check your connection and try again, or call us to reserve.",
     closed: "Online booking is not open yet. Please call us to reserve.",
   },
 };
@@ -83,12 +89,17 @@ const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart
 $("#fDate").min = todayIso;
 $("#fTime").value = "18:00";
 applyLang();
+document.documentElement.classList.add("bk-ready"); // JS is up: hide the static fallback notice
 
 const workerUrl = (CONFIG.workerUrl || "").replace(/\/$/, "");
 if (!workerUrl) {
   $("#bkForm").style.display = "none";
   $("#tentNote").textContent = t("closed");
 }
+
+// Start downloading the PDF fonts as soon as the guest begins typing, so they
+// are cached by the time they press submit (the PDF step is time-boxed anyway).
+$("#bkForm").addEventListener("focusin", () => warmupPdfFonts(), { once: true });
 
 function err(msg) { const e = $("#bkErr"); e.textContent = msg; e.style.display = "block"; }
 function docNoPublic() {
@@ -97,11 +108,10 @@ function docNoPublic() {
   const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
   return `${CONFIG.booking.docPrefix}-${ymd}-${rand}`;
 }
-const b64 = (bytes) => {
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  return btoa(s);
-};
+const withTimeout = (p, ms) => new Promise((res, rej) => {
+  const tm = setTimeout(() => rej(new Error("timeout")), ms);
+  p.then((v) => { clearTimeout(tm); res(v); }, (e) => { clearTimeout(tm); rej(e); });
+});
 
 $("#fSubmit").onclick = async () => {
   $("#bkErr").style.display = "none";
@@ -132,10 +142,12 @@ $("#fSubmit").onclick = async () => {
 
   try {
     const docNo = docNoPublic();
-    // PDF generation is best-effort: an old phone that fails here can still book
+    const filename = `ご予約確認書_${docNo}.pdf`;
+    // PDF generation is best-effort: a slow connection (7 MB of fonts) or an
+    // old phone must never stop the booking itself.
     let pdfBytes = null;
     try {
-      pdfBytes = await generateBookingPdf({
+      pdfBytes = await withTimeout(generateBookingPdf({
         docNo, createdDate: new Date().toISOString(),
         dateStart: `${date}T${time}:00${CONFIG.timezoneOffset}`, endTime: b.end,
         adults: b.adults, children: b.children,
@@ -143,22 +155,24 @@ $("#fSubmit").onclick = async () => {
         plan: b.plan, nomihodai: b.nomihodai,
         allergies: b.allergies, notes: b.notes,
         tentative: true, source: "オンライン予約フォーム",
-      });
+      }), PDF_TIMEOUT_MS);
     } catch (pdfErr) { pdfBytes = null; }
 
     $("#bkProgTxt").textContent = t("prog_send");
-    const filename = `ご予約確認書_${docNo}.pdf`;
-    const payload = { ...b, docNo, filename };
-    if (pdfBytes) payload.pdfBase64 = b64(pdfBytes);
-    const res = await fetch(workerUrl + "/book", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      let detail = "";
-      try { const j = await res.json(); detail = j.error || ""; } catch {}
-      throw new Error("HTTP " + res.status + (detail ? " — " + detail : ""));
+    // multipart: the PDF travels as a file, so neither side has to base64 it
+    const fd = new FormData();
+    fd.append("payload", JSON.stringify({ ...b, docNo, filename }));
+    if (pdfBytes) fd.append("pdf", new Blob([pdfBytes], { type: "application/pdf" }), filename);
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), SEND_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(workerUrl + "/book", { method: "POST", body: fd, signal: ac.signal });
+    } finally { clearTimeout(timer); }
+    let j = null;
+    try { j = await res.json(); } catch {}
+    if (!res.ok || !j || j.ok !== true) {
+      throw new Error("HTTP " + res.status + (j && j.error ? " — " + j.error : ""));
     }
 
     $("#bkProg").style.display = "none";
@@ -174,6 +188,7 @@ $("#fSubmit").onclick = async () => {
   } catch (e) {
     $("#bkProg").style.display = "none";
     $("#bkForm").style.display = "block";
-    err(t("errSend") + "\n[" + (e.message || e) + "]");
+    const net = e && (e.name === "TypeError" || e.name === "AbortError");
+    err((net ? t("errNet") : t("errSend")) + "\n[" + (e && e.message ? e.message : e) + "]");
   }
 };

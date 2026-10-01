@@ -40,7 +40,6 @@ export const CONFIG = {
     plan: "プラン",
     nomihodai: "飲み放題",
     reminder: "リマインド（自動）",
-    deptCategory: "部門カテゴリー",
   },
 
   // Select options (must exist in Notion — created 2026-08-03)
@@ -70,7 +69,10 @@ export const CONFIG = {
   booking: {
     docPrefix: "BH",             // ご予約確認書 prefix
     category: "顧客予約",         // カテゴリー for bookings
-    deptCategory: "ビヤホール",    // 部門カテゴリー for bookings
+    // 部門カテゴリー (multi-select in Notion). Must match the existing option
+    // spelling exactly: ビアホール (ア) — the brand spelling ビヤホール is only
+    // used in page titles/PDF text, never as a Notion value.
+    deptCategory: "ビアホール",
     plans: ["コース", "アラカルト", "未定"], // edit to real course names anytime (must exist in Notion プラン options)
     defaultDurationMin: 120,
   },

@@ -62,7 +62,8 @@ async function api(path, { method = "GET", body, isForm = false } = {}) {
 const P = CONFIG.props;
 const rt = (v) => ({ rich_text: [{ type: "text", text: { content: String(v).slice(0, 1900) } }] });
 const sel = (v) => ({ select: { name: v } });
-const msel = (arr) => ({ multi_select: (arr || []).map((n) => ({ name: n })) });
+// accepts a single name or an array of names
+const msel = (v) => ({ multi_select: (Array.isArray(v) ? v : v ? [v] : []).map((name) => ({ name: String(name) })) });
 const num = (v) => ({ number: v == null || v === "" ? null : Number(v) });
 const chk = (v) => ({ checkbox: !!v });
 const dateProp = (start, end) => ({ date: start ? { start, ...(end ? { end } : {}) } : null });
@@ -87,7 +88,8 @@ function buildProps(v, { forCreate = false } = {}) {
   if (v.email != null) props[P.email] = { email: v.email || null };
   if (v.plan) props[P.plan] = sel(v.plan);
   if (v.nomihodai != null) props[P.nomihodai] = chk(v.nomihodai);
-  if (v.deptCategory) props[P.deptCategory] = sel(v.deptCategory);
+  // 部門カテゴリー is a multi-select in Notion (string or array accepted here)
+  if (v.deptCategory) props[P.deptCategory] = msel(v.deptCategory);
   // day-before reminder (existing Notion automation reads リマインド（自動）)
   if (v.reminderFromDate) {
     const d = new Date(v.reminderFromDate.slice(0, 10) + "T00:00:00");
@@ -107,6 +109,8 @@ function parsePage(pg) {
   const mselv = (name) => (g(name)?.multi_select || []).map((o) => o.name);
   const d = g(P.date)?.date || null;
   const io = g(P.inOut)?.date || null;
+  // 部門カテゴリー: multi-select (tolerate a legacy select value too)
+  const depts = g(P.deptCategory)?.multi_select ? mselv(P.deptCategory) : (selv(P.deptCategory) ? [selv(P.deptCategory)] : []);
   return {
     id: pg.id,
     url: pg.url,
@@ -128,7 +132,9 @@ function parsePage(pg) {
     email: g(P.email)?.email || "",
     plan: selv(P.plan),
     nomihodai: !!g(P.nomihodai)?.checkbox,
-    deptCategory: selv(P.deptCategory),
+    deptCategories: depts,
+    // single value for display/comparison: the booking dept if tagged, else the first tag
+    deptCategory: depts.includes(CONFIG.booking.deptCategory) ? CONFIG.booking.deptCategory : (depts[0] || ""),
     minutes: !!g(P.minutes)?.checkbox,
     done: !!g(P.done)?.checkbox,
     files: (g(P.files)?.files || []).map((f) => f.name),

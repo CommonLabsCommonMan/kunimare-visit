@@ -18,9 +18,14 @@ function ensureFonts() {
     const b = new FontFace("KunimarePDF", `url(${CONFIG.pdf.fontBold})`, { weight: "700" });
     await Promise.all([r.load(), b.load()]);
     document.fonts.add(r); document.fonts.add(b);
-  })();
+  })().catch((e) => { fontsReady = null; throw e; }); // allow a retry after a failed download
   return fontsReady;
 }
+
+/* Public booking page calls this on first interaction so the (large) fonts
+ * are cached by the time the guest presses submit. Errors are ignored —
+ * the PDF is best effort. */
+export function warmupPdfFonts() { ensureFonts().catch(() => {}); }
 
 function loadImg(src) {
   return new Promise((res) => {

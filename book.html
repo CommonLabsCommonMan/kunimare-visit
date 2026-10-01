@@ -32,10 +32,28 @@
   .bkdone .no { font-family: var(--serif); font-size: 19px; letter-spacing: .06em; color: var(--indigo-deep); margin: 6px 0 10px; }
   .bkfoot { text-align: center; margin-top: 26px; }
   .bkfoot img { max-width: 300px; width: 70%; opacity: .9; mix-blend-mode: multiply; }
-  .bkerr { display: none; background: #FBEFEE; border: 1px solid #DDB3AF; color: #8C3A33; border-radius: 3px; padding: 10px 14px; font-size: 13px; margin-top: 12px; }
+  .bkerr { display: none; background: #FBEFEE; border: 1px solid #DDB3AF; color: #8C3A33; border-radius: 3px; padding: 10px 14px; font-size: 13px; margin-top: 12px; white-space: pre-line; }
+  .bkfallback { display: none; background: #FBEFEE; border: 1px solid #DDB3AF; color: #8C3A33; border-radius: 3px; padding: 12px 14px; font-size: 13px; margin-bottom: 18px; line-height: 1.6; }
+  .bkfallback small { display: block; color: #A86A64; margin-top: 6px; word-break: break-all; }
   .hp { position: absolute; left: -9999px; top: -9999px; height: 0; overflow: hidden; }
   @media (max-width: 560px) { .bkcard { padding: 18px 16px 20px; } .bklang { position: static; margin: 0 auto 12px; width: max-content; } }
 </style>
+<script>
+  /* Classic script: runs in every browser. If the module app below fails to
+   * load or to parse (very old browser, network error), show a readable
+   * notice instead of a silent, dead form. */
+  (function () {
+    function fallback(detail) {
+      if (document.documentElement.className.indexOf("bk-ready") >= 0) return; // app is running; it reports its own errors
+      var el = document.getElementById("bkFallback"), fm = document.getElementById("bkForm");
+      if (el) { el.style.display = "block"; var d = document.getElementById("bkFallbackDetail"); if (d && detail) d.textContent = "[" + detail + "]"; }
+      if (fm) fm.style.display = "none";
+    }
+    window.__bkFallback = fallback;
+    window.addEventListener("error", function (e) { fallback(e && e.message ? e.message : ""); });
+    window.addEventListener("unhandledrejection", function (e) { fallback(e && e.reason && e.reason.message ? e.reason.message : ""); });
+  })();
+</script>
 </head>
 <body>
 <div class="bkwrap">
@@ -46,32 +64,35 @@
     <div class="sub">KUNIMARE BREWERY — BEER HALL RESERVATION</div>
   </div>
 
-  <div class="bknote" id="tentNote"></div>
+  <noscript><div class="bkfallback" style="display:block">このページのご利用には JavaScript が必要です。ブラウザの設定をご確認いただくか、お電話にてご予約ください。<br>This page requires JavaScript. Please enable it or call us to reserve.</div></noscript>
+  <div class="bkfallback" id="bkFallback">ページを正しく読み込めませんでした。ブラウザを最新の状態に更新するか、別のブラウザ（Safari / Chrome）でもう一度お開きください。お急ぎの場合はお電話にてご予約ください。<br>The page could not load correctly. Please update your browser or try Safari / Chrome, or call us to reserve.<small id="bkFallbackDetail"></small></div>
+
+  <div class="bknote" id="tentNote">※ 仮予約制です。送信後、担当者よりお電話またはメールで確定のご連絡を差し上げます。</div>
 
   <div class="bkcard">
-    <form id="bkForm" onsubmit="return false">
+    <form id="bkForm" onsubmit="return false" autocomplete="on">
       <div class="fgrid">
-        <div class="field"><label id="lDate"></label><input type="date" id="fDate" required></div>
+        <div class="field"><label id="lDate" for="fDate">ご希望日</label><input type="date" id="fDate" required></div>
         <div class="field"><div class="hstack">
-          <div><label id="lTime"></label><input type="time" id="fTime" required></div>
-          <div><label id="lEnd"></label><input type="time" id="fEnd"></div>
+          <div><label id="lTime" for="fTime">開始時間</label><input type="time" id="fTime" required></div>
+          <div><label id="lEnd" for="fEnd">終了（目安・任意）</label><input type="time" id="fEnd"></div>
         </div></div>
         <div class="field"><div class="hstack">
-          <div><label id="lAdults"></label><input type="number" id="fAdults" min="0" value="2"></div>
-          <div><label id="lChildren"></label><input type="number" id="fChildren" min="0" value="0"></div>
+          <div><label id="lAdults" for="fAdults">大人</label><input type="number" id="fAdults" min="0" inputmode="numeric" value="2"></div>
+          <div><label id="lChildren" for="fChildren">お子様</label><input type="number" id="fChildren" min="0" inputmode="numeric" value="0"></div>
         </div></div>
-        <div class="field"><label id="lPlan"></label><select id="fPlan"></select>
-          <div class="hint"><label class="pill green"><input type="checkbox" id="fNomi"><span id="lNomi"></span></label></div></div>
-        <div class="field"><label id="lName"></label><input type="text" id="fName" autocomplete="name"></div>
-        <div class="field"><label id="lPhone"></label><input type="text" id="fPhone" inputmode="tel" autocomplete="tel"></div>
-        <div class="field"><label id="lEmail"></label><input type="text" id="fEmail" inputmode="email" autocomplete="email"></div>
-        <div class="field"><label id="lGroup"></label><input type="text" id="fGroup" autocomplete="organization"></div>
-        <div class="field full"><label id="lAllergy"></label><textarea id="fAllergy" style="min-height:60px"></textarea></div>
-        <div class="field full"><label id="lNotes"></label><textarea id="fNotes" style="min-height:60px"></textarea></div>
+        <div class="field"><label id="lPlan" for="fPlan">プラン</label><select id="fPlan"></select>
+          <div class="hint"><label class="pill green"><input type="checkbox" id="fNomi"><span id="lNomi">☑ 飲み放題を希望</span></label></div></div>
+        <div class="field"><label id="lName" for="fName">代表者名（必須）</label><input type="text" id="fName" autocomplete="name"></div>
+        <div class="field"><label id="lPhone" for="fPhone">お電話番号（必須）</label><input type="tel" id="fPhone" inputmode="tel" autocomplete="tel"></div>
+        <div class="field"><label id="lEmail" for="fEmail">メール（任意）</label><input type="email" id="fEmail" inputmode="email" autocomplete="email" autocapitalize="off"></div>
+        <div class="field"><label id="lGroup" for="fGroup">会社・団体名（任意）</label><input type="text" id="fGroup" autocomplete="organization"></div>
+        <div class="field full"><label id="lAllergy" for="fAllergy">アレルギー・食事制限</label><textarea id="fAllergy" style="min-height:60px"></textarea></div>
+        <div class="field full"><label id="lNotes" for="fNotes">ご要望・備考</label><textarea id="fNotes" style="min-height:60px"></textarea></div>
       </div>
-      <div class="hp"><label>Website<input type="text" id="fWebsite" tabindex="-1" autocomplete="off"></label></div>
-      <label class="consent"><input type="checkbox" id="fConsent"><span id="lConsent"></span></label>
-      <button class="btn primary lg bksubmit" id="fSubmit"></button>
+      <div class="hp" aria-hidden="true"><label>Website<input type="text" id="fWebsite" tabindex="-1" autocomplete="off"></label></div>
+      <label class="consent"><input type="checkbox" id="fConsent"><span id="lConsent">ご入力いただいた情報は、本予約の受付・ご連絡の目的にのみ使用します。</span></label>
+      <button type="button" class="btn primary lg bksubmit" id="fSubmit">この内容で予約する</button>
       <div class="bkerr" id="bkErr"></div>
     </form>
     <div class="bkprog" id="bkProg"><div class="sp"></div><div id="bkProgTxt"></div></div>
@@ -87,6 +108,8 @@
   <div class="bkfoot"><img src="assets/footer.png" alt="国稀酒造株式会社"></div>
 </div>
 <script src="vendor/pdf-lib.min.js"></script>
-<script type="module" src="book.js"></script>
+<!-- browsers without ES-module support skip the app entirely: tell them -->
+<script nomodule>window.__bkFallback && window.__bkFallback("no module support");</script>
+<script type="module" src="book.js" onerror="window.__bkFallback && window.__bkFallback('book.js failed to load')"></script>
 </body>
 </html>

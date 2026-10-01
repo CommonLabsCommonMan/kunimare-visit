@@ -6,28 +6,32 @@
  *
  *  A) スタッフ用アプリの中継（リレー）
  *     ブラウザ → Worker → api.notion.com。トークンはアプリ側から
- *     Authorization ヘッダーで届いたものだけを転送します。
- *     ※ Workerに保存した NOTION_TOKEN は絶対にここでは使いません
- *       （公開URLなので、使うと誰でもDBを読めてしまうため）。
+ *     Authorization ヘッダーで届いたものを転送します。届かない場合のみ
+ *     Workerに保存した NOTION_TOKEN を注入します（STAFF_KEY で保護可）。
  *
- *  B) 公開予約API（POST /book のみ）
- *     お客様向け book.html からの送信を受け、NOTION_TOKEN
- *     （Workerのシークレット）でNotionに予約ページを作成します。
- *     ・カテゴリー=顧客予約／部門カテゴリー=ビヤホール
- *     ・訪問ステータス=予約済（仮予約）
- *     ・リマインド（自動）= 前日
- *     ・ご予約確認書PDFを「ファイル&メディア」に添付
+ *  B) 公開予約API（/book）
+ *     POST /book … お客様向け book.html からの送信を受け、NOTION_TOKEN
+ *       （Workerのシークレット）でNotionに予約ページを作成します。
+ *       ・カテゴリー=顧客予約／部門カテゴリー=ビアホール（複数選択）
+ *       ・訪問ステータス=予約済（仮予約）
+ *       ・リマインド（自動）= 前日
+ *       ・ご予約確認書PDFを「ファイル&メディア」に添付
+ *     GET /book  … 動作確認用。デプロイ済みの WORKER_VERSION を返します。
  *
  * ◆ 設置手順（約5分）
  *   1. https://dash.cloudflare.com → Workers & Pages → Create Worker
- *   2. このファイルを貼り付けて Deploy
+ *   2. このファイルを丸ごと貼り付けて Deploy
  *   3. Settings → Variables and Secrets：
  *        NOTION_TOKEN   = ntn_…（シークレットとして保存。公開予約に必須）
- *        ALLOWED_ORIGIN = https://<ユーザー名>.github.io（推奨）
+ *        ALLOWED_ORIGIN = https://<ユーザー名>.github.io（推奨。複数はカンマ区切り）
+ *        STAFF_KEY      = 任意の合言葉（スタッフ中継を保護したい場合）
  *   4. スタッフアプリ：設定 → 接続方法「自前リレー」＋ Worker URL
- *   5. 公開予約：config.js の booking.workerUrl に Worker URL を設定
+ *   5. 公開予約：config.js の workerUrl に Worker URL を設定
+ *   6. 確認：ブラウザで https://<worker>.workers.dev/book を開き、
+ *      "version" が下の WORKER_VERSION と同じならデプロイ完了です。
  * ============================================================ */
 
+const WORKER_VERSION = "2026-10-01";
 const NOTION = "https://api.notion.com";
 const NOTION_VERSION = "2025-09-03";
 
@@ -39,30 +43,33 @@ const P = {
   count: "訪問人数", phone: "電話番号", email: "メール",
   plan: "プラン", nomihodai: "飲み放題", reminder: "リマインド（自動）", files: "ファイル&メディア",
 };
-const BOOK = { category: "顧客予約", dept: "ビヤホール", status: "予約済" };
+// 部門カテゴリー は Notion 側で「複数選択（multi_select）」。既存の選択肢は
+// 「ビアホール」（ア）なので、config.js の booking.deptCategory と同じ綴りにすること。
+const BOOK = { category: "顧客予約", dept: "ビアホール", status: "予約済" };
+const PLANS = ["コース", "アラカルト", "未定"]; // config.js booking.plans と同じ
+const MAX_PDF_BYTES = 3_000_000;
 
 export default {
   async fetch(request, env) {
-    const allowed = env.ALLOWED_ORIGIN || "*";
-    const origin = request.headers.get("Origin") || "";
-    const cors = {
-      "Access-Control-Allow-Origin": allowed === "*" ? "*" : (origin === allowed ? origin : allowed),
-      "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization, Content-Type, Notion-Version, X-Staff-Key",
-      "Access-Control-Max-Age": "86400",
-    };
-    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+    const cors = corsHeaders(request, env);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
     const url = new URL(request.url);
 
     /* ---------- B) 公開予約API ---------- */
-    if (url.pathname === "/book" && request.method === "POST") {
-      try {
-        const out = await handleBook(request, env);
-        return json(out, 200, cors);
-      } catch (e) {
-        return json({ ok: false, error: String(e.message || e).slice(0, 300) }, 400, cors);
+    if (url.pathname === "/book") {
+      if (request.method === "GET") {
+        return json({ ok: true, service: "kunimare-book", version: WORKER_VERSION, booking: !!env.NOTION_TOKEN }, 200, cors);
       }
+      if (request.method === "POST") {
+        try {
+          const out = await handleBook(request, env);
+          return json(out, 200, cors);
+        } catch (e) {
+          return json({ ok: false, error: String(e.message || e).slice(0, 300) }, 400, cors);
+        }
+      }
+      return json({ ok: false, error: "method not allowed" }, 405, cors);
     }
 
     /* ---------- A) スタッフ用リレー ---------- */
@@ -93,10 +100,33 @@ export default {
   },
 };
 
+/* ================= CORS =================
+ * ALLOWED_ORIGIN: 未設定なら "*"。1つ、またはカンマ区切りで複数指定可。
+ * 大文字小文字・末尾の "/"・パス部分は無視して比較する（設定ミスで予約が
+ * 止まらないように）。 */
+function corsHeaders(request, env) {
+  const norm = (o) => {
+    const s = String(o || "").trim();
+    try { return new URL(s).origin.toLowerCase(); } catch { return s.replace(/\/+$/, "").toLowerCase(); }
+  };
+  const list = String(env.ALLOWED_ORIGIN || "").split(/[,\s]+/).map(norm).filter(Boolean);
+  const origin = request.headers.get("Origin") || "";
+  let allow = "*";
+  if (list.length && !list.includes("*")) allow = list.includes(norm(origin)) ? origin : list[0];
+  const h = {
+    "Access-Control-Allow-Origin": allow,
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, Notion-Version, X-Staff-Key",
+    "Access-Control-Max-Age": "86400",
+  };
+  if (allow !== "*") h["Vary"] = "Origin";
+  return h;
+}
+
 /* ================= booking handler ================= */
 async function handleBook(request, env) {
   if (!env.NOTION_TOKEN) throw new Error("NOTION_TOKEN not configured");
-  const b = await request.json();
+  const { b, pdf } = await readBooking(request);
 
   // honeypot: bots fill it → pretend success, write nothing
   if (b.hp) return { ok: true };
@@ -113,10 +143,10 @@ async function handleBook(request, env) {
   const children = Math.min(Math.max(parseInt(b.children) || 0, 0), 500);
   const total = adults + children;
   const email = s(b.email, 120), group = s(b.group, 120);
-  const plan = ["コース", "アラカルト", "未定"].includes(b.plan) ? b.plan : "未定";
+  const plan = PLANS.includes(b.plan) ? b.plan : "未定";
   const nomihodai = !!b.nomihodai;
   const allergies = s(b.allergies, 500), notes = s(b.notes, 1000);
-  const docNo = /^[A-Z0-9-]{4,24}$/.test(s(b.docNo, 24)) ? b.docNo : "BH-" + date.replace(/-/g, "");
+  const docNo = /^[A-Z0-9-]{4,24}$/.test(s(b.docNo, 24)) ? s(b.docNo, 24) : "BH-" + date.replace(/-/g, "");
 
   // day-before reminder
   const dt = new Date(date + "T00:00:00Z");
@@ -140,6 +170,10 @@ async function handleBook(request, env) {
   const para = (txt) => ({ object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: txt.slice(0, 1900) } }] } });
 
   // --- create the reservation page ---
+  // Property types must match the Notion schema exactly (select vs multi_select
+  // is a hard validation error): カテゴリー/訪問ステータス/プラン = select,
+  // 部門カテゴリー = multi_select, 電話番号 = phone_number, メール = email,
+  // 訪問人数 = number, 飲み放題 = checkbox, 日付/リマインド = date.
   const page = await api("/v1/pages", {
     method: "POST",
     body: JSON.stringify({
@@ -148,7 +182,7 @@ async function handleBook(request, env) {
         [P.title]: { title: [{ type: "text", text: { content: `【BH予約】${name}様 ${total}名` } }] },
         [P.date]: { date: { start: `${date}T${time}:00+09:00`, ...(end ? { end: `${date}T${end}:00+09:00` } : {}) } },
         [P.category]: { select: { name: BOOK.category } },
-        [P.dept]: { select: { name: BOOK.dept } },
+        [P.dept]: { multi_select: [{ name: BOOK.dept }] },
         [P.status]: { select: { name: BOOK.status } },
         [P.visitor]: rt(name + "様"),
         ...(group ? { [P.company]: rt(group) } : {}),
@@ -171,14 +205,12 @@ async function handleBook(request, env) {
   // --- attach the confirmation PDF (best effort) ---
   let attached = false;
   try {
-    if (b.pdfBase64 && b.pdfBase64.length < 4_000_000) {
-      const bin = atob(b.pdfBase64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const filename = /\.pdf$/.test(s(b.filename, 120)) ? b.filename : `ご予約確認書_${docNo}.pdf`;
+    if (pdf) {
+      const fn = s(b.filename, 120);
+      const filename = /\.pdf$/i.test(fn) ? fn : `ご予約確認書_${docNo}.pdf`;
       const up = await api("/v1/file_uploads", { method: "POST", body: JSON.stringify({ filename, content_type: "application/pdf" }) });
       const fd = new FormData();
-      fd.append("file", new Blob([bytes], { type: "application/pdf" }), filename);
+      fd.append("file", pdf, filename);
       await api(`/v1/file_uploads/${up.id}/send`, { method: "POST", body: fd, form: true });
       await api(`/v1/pages/${page.id}`, {
         method: "PATCH",
@@ -188,7 +220,34 @@ async function handleBook(request, env) {
     }
   } catch (e) { /* page is created; PDF attach failure is non-fatal */ }
 
-  return { ok: true, docNo, attached };
+  return { ok: true, docNo, attached, version: WORKER_VERSION };
+}
+
+/* 本文の読み取り。
+ *  - multipart/form-data: payload = JSON文字列、pdf = ファイル（現在の book.js）
+ *    → Base64 変換が不要で、Worker の CPU 時間をほとんど使わない
+ *  - application/json: pdfBase64 を含む旧形式（古いキャッシュのページ用） */
+async function readBooking(request) {
+  const ct = (request.headers.get("Content-Type") || "").toLowerCase();
+  if (ct.includes("multipart/form-data")) {
+    const form = await request.formData();
+    let b;
+    try { b = JSON.parse(String(form.get("payload") || "{}")); } catch { throw new Error("bad payload"); }
+    const f = form.get("pdf");
+    const pdf = f && typeof f === "object" && typeof f.size === "number" && f.size > 0 && f.size <= MAX_PDF_BYTES ? f : null;
+    return { b: b && typeof b === "object" ? b : {}, pdf };
+  }
+  const b = await request.json();
+  let pdf = null;
+  if (typeof b.pdfBase64 === "string" && b.pdfBase64.length <= MAX_PDF_BYTES * 1.37) {
+    try {
+      const bin = atob(b.pdfBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      pdf = new Blob([bytes], { type: "application/pdf" });
+    } catch { pdf = null; }
+  }
+  return { b: b && typeof b === "object" ? b : {}, pdf };
 }
 
 function json(obj, status, cors) {

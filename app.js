@@ -483,6 +483,9 @@ async function runBookingPipeline(b, existingId) {
   };
 
   const docNo = makeDocNo(null, CONFIG.booking.docPrefix);
+  // when editing, keep any other 部門 tags already on the row (multi-select)
+  const existing = existingId ? visits.find((x) => x.id === existingId) : null;
+  const deptTags = [...new Set([...(existing?.deptCategories || []), CONFIG.booking.deptCategory])];
   const total = b.adults + b.children;
   const dateStart = `${b.date}T${b.start}:00${TZ}`;
   const dateEnd = b.end ? `${b.date}T${b.end}:00${TZ}` : undefined;
@@ -508,7 +511,7 @@ async function runBookingPipeline(b, existingId) {
       title: `【BH予約】${b.repName}様 ${total}名`,
       dateStart, dateEnd,
       category: CONFIG.booking.category,
-      deptCategory: CONFIG.booking.deptCategory,
+      deptCategory: deptTags,
       visitorName: b.repName + "様",
       company: b.groupName,
       count: total,
