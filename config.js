@@ -65,6 +65,16 @@ export const CONFIG = {
   // in the Worker as a secret (NOTION_TOKEN) — never in this public repo.
   workerUrl: "https://kunimare-book.pratik-biswas.workers.dev",
 
+  // ---- Default people on every record the app creates ----
+  // Set on create only (staff change individual rows in Notion as needed).
+  //   担当者        = Pratik
+  //   議事録作成者  = Pratik + Kunimare Visit App (the Notion integration)
+  // Notion user IDs. Change here and in cloudflare-worker.js (OWNERS) together.
+  owners: {
+    person: ["2dfd872b-594c-81a2-a6ee-00026d1a9f98"],
+    minutesAuthor: ["2dfd872b-594c-81a2-a6ee-00026d1a9f98", "3b6f5289-a51c-8120-83ac-0027e5501d33"],
+  },
+
   // ---- Beer hall booking (ビヤホール予約) ----
   booking: {
     docPrefix: "BH",             // ご予約確認書 prefix
